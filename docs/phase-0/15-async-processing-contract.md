@@ -1,21 +1,54 @@
-# Asynchronous Processing Contract (RabbitMQ)
+# Phase 0: Asynchronous Processing Contract (RabbitMQ)
 
-To ensure the REST API remains responsive, heavy workloads are offloaded to background workers using RabbitMQ.
+This document defines the strategy for handling long-running or resource-intensive tasks in Sentrix AI using RabbitMQ.
 
-## Async Candidates
-* Large Windows Event Log parsing and analysis.
-* Heavy AI generation tasks (e.g., generating a massive security report).
-* RAG knowledge base ingestion and chunking.
+## 1. Justification for Asynchronous Processing
+Synchronous HTTP requests should complete within hundreds of milliseconds. Operations that take seconds or minutes (parsing large files, generating PDFs, heavy ML inference) must not block the HTTP thread. They will be offloaded to RabbitMQ.
 
-## Conceptual Architecture
-1. **Controller**: Receives request, saves a `PENDING` job record in PostgreSQL, generates a `jobId`.
-2. **Producer**: Publishes a JSON payload to a RabbitMQ Exchange with a specific Routing Key (e.g., `eventlog.analyze`).
-3. **Response**: Returns `HTTP 202 Accepted` and the `jobId` to the client.
-4. **Consumer**: Spring Boot `@RabbitListener` worker picks up the message, performs the heavy lifting, updates the PostgreSQL record to `COMPLETED` or `FAILED`.
+## 2. Approved Asynchronous Candidates
+*   **Windows Event Log Analysis**: Parsing a 50MB `.evtx` file and evaluating hundreds of rules.
+*   **Security Report Generation**: Compiling data and rendering a PDF.
+*   **RAG Knowledge Ingestion**: Processing, chunking, and embedding large PDFs/Markdown files for the knowledge base.
+*   (Optional) Complex AI explanations if LLM generation time is deemed too slow for synchronous waiting.
 
-## Messaging Standards
-* **Job Payload**: Must include `jobId`, `sessionId`, and necessary identifiers (e.g., `fileId`). Do not pass large binary files through the message broker; pass the storage reference.
-* **Idempotency**: Workers must check the job status in PostgreSQL before processing to avoid duplicate work if a message is redelivered.
-* **Failure Handling**: Failed messages should be retried (with backoff). If they fail repeatedly, they must be routed to a Dead Letter Queue (DLQ).
+## 3. Message Broker Concepts
 
-*Note: RabbitMQ implementation is deferred to Phase 12.*
+### Exchanges and Routing
+*   Use Direct or Topic exchanges.
+*   Example: `sentrix.tasks.exchange`
+
+### Queues
+Define specific queues for different workloads to allow independent scaling of workers:
+*   `queue.event_log.parse`
+*   `queue.report.generate`
+*   `queue.rag.ingest`
+
+### Job Payload Structure (JSON)
+Messages must contain sufficient context to execute the task, but not large data blobs (pass IDs or file paths instead).
+
+```json
+{
+  "jobId": "uuid-1234",
+  "sessionId": "uuid-5678",
+  "taskType": "PARSE_EVTX",
+  "payload": {
+    "fileId": "uuid-abcd",
+    "storagePath": "/tmp/uploads/file.evtx"
+  },
+  "submittedAt": "2023-10-27T10:00:00Z"
+}
+```
+
+## 4. Job Tracking Lifecycle
+Because the HTTP request returns immediately, the frontend needs a way to know when the job is done.
+
+1.  **Submit**: Controller creates a `jobId`, saves initial status (`PENDING`) to Redis, publishes message to RabbitMQ, and returns `jobId` to client.
+2.  **Process**: RabbitMQ Consumer (Worker) receives message, updates status to `PROCESSING` in Redis.
+3.  **Execute**: Worker performs the heavy lifting (e.g., parses EVTX, saves results to PostgreSQL).
+4.  **Complete**: Worker updates status to `COMPLETED` (or `FAILED`) in Redis, potentially with a reference to the newly created database record ID.
+5.  **Client Polling**: Frontend polls `/api/v1/jobs/{jobId}/status` every few seconds until it sees `COMPLETED`, then redirects the user to the result page.
+
+## 5. Resilience & Failure Handling
+*   **Dead Letter Exchange (DLX)**: If a message fails processing multiple times (e.g., malformed EVTX file crashes parser), it must be routed to a DLX (`queue.dead_letter`) instead of infinitely retrying and blocking the queue.
+*   **Idempotency**: Consumers must be written such that processing the exact same message twice does not corrupt data (e.g., check if `fileId` was already parsed before starting).
+*   **Retry Policy**: Implement Spring AMQP retry templates for transient errors (e.g., temporary DB connection loss), but fail fast for unrecoverable errors (e.g., File Not Found).

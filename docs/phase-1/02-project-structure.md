@@ -1,18 +1,32 @@
-# Project Structure - Phase 1
+# 02 - Project Structure
 
-## Final Structure
-The project follows a clean repository structure separating frontend, backend, and infrastructure concerns to avoid unnecessary monorepo complexity.
+The foundation establishes a strict physical separation of concerns:
 
 ```
 /
-├── backend/            # Spring Boot Java 21 Application
-├── frontend/           # React + Vite TypeScript Application
-├── docs/               # Architecture and project documentation
-├── infrastructure/     # Shared infrastructure definitions (if any)
-├── .github/            # CI/CD workflows
-├── .gitignore          # Global gitignore
-├── README.md           # Developer experience guide
-└── docker-compose.yml  # Local development services (Redis, RabbitMQ)
+├── backend/                  # Java 25 LTS Spring Boot Backend
+│   ├── src/main/java/com/sentrix/ai/
+│   │   ├── config/           # Foundation configuration
+│   │   ├── common/           # Envelopes & global exceptions
+│   │   ├── security/         # Foundation security config
+│   │   ├── session/          # Session boundaries
+│   │   ├── dashboard/        # Dashboard APIs (incl. Health)
+│   │   └── (other domains)   # Empty domain boundaries
+│   └── pom.xml               # Maven configuration
+│
+├── frontend/                 # React 18 + Vite Frontend
+│   ├── src/                  
+│   │   ├── components/       # shadcn/ui components
+│   │   ├── lib/              # utilities (cn)
+│   │   └── ...               # React foundation
+│   ├── vite.config.ts        # Vite config with alias
+│   └── tailwind.config.js    # Tailwind v3 config
+│
+├── docs/                     # Project documentation
+│   ├── phase-0/              
+│   └── phase-1/              
+│
+├── docker-compose.yml        # Redis & RabbitMQ
+├── .github/workflows/        # CI Pipeline
+└── .env.example              # Secret templates
 ```
-
-This structure strictly adheres to the Phase 0 architecture boundaries and establishes clear separation of concerns.

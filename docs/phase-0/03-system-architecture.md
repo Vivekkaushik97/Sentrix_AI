@@ -1,6 +1,8 @@
-# System Architecture
+# Phase 0: System Architecture
 
-The Sentrix AI system utilizes a modern, decoupled architecture driven by a React frontend and a Java 21 Spring Boot backend.
+This document outlines the intended system architecture for Sentrix AI, utilizing a modern, Java-centric backend combined with a React frontend.
+
+## Conceptual Architecture Diagram
 
 ```
                      SENTRIX AI
@@ -11,7 +13,7 @@ The Sentrix AI system utilizes a modern, decoupled architecture driven by a Reac
                        Axios
                          |
                          v
-              Java 21 + Spring Boot (REST APIs)
+              Java 25 LTS + Spring Boot (REST API)
                          |
    ------------------------------------------------
    |          |          |         |              |
@@ -27,41 +29,88 @@ Engine    Analyzer    Module     Engine        Engine
     Supabase PG       Redis          RabbitMQ
     + pgvector       Sessions        Background
     + application    + cache         Processing
-      data
+      data           + jobs
                          |
                          v
                    Spring AI
                          |
                          v
-                  Configurable LLM
+            Configurable LLM Provider
 ```
 
-### Request Flow
-1. User interacts with the React frontend.
-2. Frontend makes HTTP requests via Axios to the Spring Boot REST API.
-3. Spring Security validates the session via Redis.
-4. Controller routes the request to the appropriate Domain Service (e.g., `FraudDetectionService`).
+## 1. Request Flow
+1. User accesses the frontend application.
+2. Frontend requests `/api/v1/session` to establish an anonymous identity if one does not exist.
+3. User performs an action (e.g., uploads an EVTX file).
+4. Frontend makes an API call to the appropriate Spring Boot controller.
+5. Controller validates input and delegates to a Service layer.
+6. Service layer interacts with the Database, Redis, or external APIs.
+7. Service layer returns standard DTOs.
+8. Controller wraps DTOs in a standard API response and returns JSON to the frontend.
 
-### Data Flow
-1. **Synchronous**: Small payload requests (e.g., CVE lookup) query Supabase PostgreSQL directly, optionally format context using Spring AI, and return the response immediately.
-2. **Asynchronous**: Heavy operations (e.g., large Event Log parsing, Report Generation) place a job in RabbitMQ. The backend returns a `jobId`. Worker services consume the message, process the data, persist to PostgreSQL, and update the status in Redis/PG. Frontend polls or receives notifications (TO BE DECIDED) for completion.
+## 2. Data Flow
+* **Transactional Data**: Persisted directly to Supabase PostgreSQL using Hibernate/JPA.
+* **Session Data**: Stored in Redis for fast access and automatic expiration.
+* **File Uploads**: Stored temporarily on disk/storage, metadata in PostgreSQL.
+* **AI Prompts**: Assembled in memory using data from PostgreSQL, sent to external LLM, and results stored back in PostgreSQL.
 
-### AI Flow
-1. Specialized modules construct context from DB queries.
-2. The context and user intent are passed to the `ai` module.
-3. Spring AI formats the prompt and calls the Configurable LLM provider.
-4. Output is validated, persisted (if necessary), and returned.
+## 3. Service Responsibilities
+* **Controllers**: HTTP routing, request validation, response wrapping.
+* **Services**: Core business logic, transaction boundaries (`@Transactional`), orchestrating multiple repositories.
+* **Repositories**: Spring Data JPA interfaces for database access.
+* **Message Consumers**: RabbitMQ listeners for background tasks (e.g., parsing large files, generating PDF reports).
 
-### RAG Flow
-1. **Ingestion**: Admin uploads cybersecurity documents -> text is extracted -> chunked -> embedded via Spring AI -> stored in Supabase PostgreSQL using `pgvector`.
-2. **Retrieval**: User asks question -> query is embedded -> similarity search runs against pgvector -> top-K chunks are injected into the LLM prompt -> AI responds.
+## 4. Synchronous vs Asynchronous Operations
+### Synchronous (Immediate Response)
+* Session creation/validation
+* Dashboard metric retrieval
+* UPI Fraud detection (assuming fast ML inference)
+* CVE lookups
+* Chatbot interactions (with streaming)
+* Analysis history retrieval
 
-### Session Flow
-1. Client connects without authentication.
-2. Backend generates a UUID session token.
-3. Token stored in Redis with an expiration (TTL).
-4. Token returned to client as an HTTP-only, SameSite=Strict cookie.
-5. Every subsequent request extends the TTL in Redis.
+### Asynchronous (Deferred Processing via RabbitMQ)
+* Windows Event Log (EVTX) parsing and analysis (large files)
+* PDF Security Report generation
+* Background ingestion of RAG knowledge documents
 
-### Future Phases
-Docker, Nginx (Reverse Proxy), Cloudflare (Edge Security/WAF), and Prometheus/Grafana (Monitoring) will wrap this core architecture in later deployment phases.
+## 5. External API Interactions
+* **LLM Provider**: Outbound HTTP requests handled via Spring AI framework.
+* **CVE Data Source**: Outbound HTTP requests to external vulnerability databases (e.g., NVD). Needs resilient circuit breakers (e.g., Resilience4j) and caching to handle rate limits.
+
+## 6. AI Flow
+1. Domain Service identifies a need for explanation (e.g., high fraud score).
+2. Domain Service constructs a specific context object.
+3. Context is passed to `AiExplanationService`.
+4. Spring AI formats a prompt using the configured model and context.
+5. LLM generates a response.
+6. Response is parsed and attached to the domain entity (e.g., `FraudAnalysis`).
+
+## 7. RAG Flow
+1. **Ingestion**: Admin uploads cybersecurity PDF/Markdown. System extracts text, chunks it, generates embeddings, and saves to PostgreSQL (pgvector).
+2. **Retrieval**: User asks the Chat Assistant a question. System embeds the question, queries pgvector for the Top-K most similar chunks.
+3. **Augmentation**: System injects those chunks into the LLM prompt.
+4. **Generation**: LLM generates an answer grounded in the provided context.
+
+## 8. Database Flow
+* **Supabase PostgreSQL**: Acts as the primary durable datastore. Uses HikariCP for connection pooling.
+* **pgvector**: Enabled in Supabase for vector similarity search.
+
+## 9. Caching Flow
+* **Redis**: Used for caching external API responses (e.g., CVE details) to reduce latency and avoid rate limits. Used for Spring Session management.
+
+## 10. Session Flow
+1. Frontend lacks a session cookie.
+2. Calls `/api/v1/session/init`.
+3. Spring Security + Spring Session intercepts.
+4. Redis stores new session metadata.
+5. Response includes `Set-Cookie` (HTTP-only, Secure, SameSite).
+6. Subsequent requests automatically include the cookie, identifying the anonymous user.
+
+## 11. Report Flow
+1. User clicks "Generate PDF Report" for a specific analysis.
+2. Controller publishes a message to RabbitMQ.
+3. Returns `Job ID` to frontend.
+4. RabbitMQ worker picks up message, fetches data, uses PDF library to generate report.
+5. Worker saves PDF to storage and updates Job Status in Redis/PostgreSQL.
+6. Frontend polls Job Status or receives WebSocket update, then downloads the file.

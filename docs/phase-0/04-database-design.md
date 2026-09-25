@@ -1,96 +1,200 @@
-# Database Design
+# Phase 0: Database Design
 
-Logical PostgreSQL data model for Sentrix AI (hosted on Supabase).
+This document details the logical PostgreSQL data model for Sentrix AI. Supabase will be used as the managed PostgreSQL provider, utilizing the `pgvector` extension for RAG.
 
-## 1. Entities & Schema
-
-### Session Management
-* **`anonymous_sessions`**
-  * **Purpose**: Durable record of sessions (Redis handles fast lookups/TTL, PG stores history).
-  * **Columns**: `id` (UUID, PK), `created_at` (TIMESTAMPTZ), `last_active_at` (TIMESTAMPTZ), `ip_hash` (VARCHAR, optional/anonymized).
-
-### Common Analysis
-* **`analysis_records`**
-  * **Purpose**: Centralized table for all analyses to enable unified history and dashboarding.
-  * **Columns**: `id` (UUID, PK), `session_id` (UUID, FK -> anonymous_sessions), `analysis_type` (VARCHAR Enum: FRAUD, EVENT_LOG, CVE), `status` (VARCHAR Enum: PENDING, COMPLETED, FAILED), `risk_score` (INTEGER 0-100), `risk_classification` (VARCHAR Enum: LOW, MEDIUM, HIGH, CRITICAL), `created_at`, `updated_at`.
-
-### Fraud
-* **`fraud_analyses`**
-  * **Purpose**: Results of fraud detection.
-  * **Columns**: `id` (UUID, PK), `analysis_record_id` (UUID, FK, Unique), `model_version` (VARCHAR), `fraud_probability` (FLOAT), `ai_explanation` (TEXT).
-* **`fraud_transactions`**
-  * **Purpose**: The input transaction data.
-  * **Columns**: `id` (UUID, PK), `fraud_analysis_id` (UUID, FK), `amount` (DECIMAL), `timestamp` (TIMESTAMPTZ), `features_json` (JSONB - for flexible model inputs).
-
-### Event Logs
-* **`uploaded_files`**
-  * **Purpose**: Tracking uploaded EVTX/XML files.
-  * **Columns**: `id` (UUID, PK), `session_id` (UUID, FK), `filename` (VARCHAR), `file_size_bytes` (BIGINT), `storage_path` (VARCHAR), `uploaded_at` (TIMESTAMPTZ).
-* **`log_analyses`**
-  * **Purpose**: Results of log parsing.
-  * **Columns**: `id` (UUID, PK), `analysis_record_id` (UUID, FK, Unique), `uploaded_file_id` (UUID, FK), `total_events` (INTEGER), `suspicious_events` (INTEGER), `ai_summary` (TEXT).
-* **`threat_indicators`**
-  * **Purpose**: Specific threats found in the logs.
-  * **Columns**: `id` (UUID, PK), `log_analysis_id` (UUID, FK), `event_id` (VARCHAR), `severity` (VARCHAR), `description` (TEXT).
-
-### CVE
-* **`cve_records`**
-  * **Purpose**: Cache of external CVE data.
-  * **Columns**: `id` (VARCHAR, PK - e.g., 'CVE-2023-1234'), `description` (TEXT), `cvss_score` (FLOAT), `published_date` (DATE), `last_updated` (TIMESTAMPTZ).
-* **`cve_analyses`**
-  * **Purpose**: User's specific analysis/query of a CVE.
-  * **Columns**: `id` (UUID, PK), `analysis_record_id` (UUID, FK, Unique), `cve_id` (VARCHAR, FK), `ai_explanation` (TEXT).
-
-### AI & Chat
-* **`chat_sessions`**
-  * **Purpose**: Grouping chat messages.
-  * **Columns**: `id` (UUID, PK), `anonymous_session_id` (UUID, FK), `title` (VARCHAR), `created_at` (TIMESTAMPTZ).
-* **`chat_messages`**
-  * **Purpose**: Message history.
-  * **Columns**: `id` (UUID, PK), `chat_session_id` (UUID, FK), `role` (VARCHAR Enum: USER, AI, SYSTEM), `content` (TEXT), `created_at` (TIMESTAMPTZ).
-
-### RAG (Knowledge Base)
-* **`knowledge_documents`**
-  * **Purpose**: Source documents for RAG.
-  * **Columns**: `id` (UUID, PK), `title` (VARCHAR), `source_url` (VARCHAR), `created_at`.
-* **`knowledge_chunks`**
-  * **Purpose**: Chunked text and embeddings for similarity search.
-  * **Columns**: `id` (UUID, PK), `document_id` (UUID, FK), `content` (TEXT), `embedding` (VECTOR - pgvector type).
-
-### Reports
-* **`security_reports`**
-  * **Purpose**: Generated reports.
-  * **Columns**: `id` (UUID, PK), `session_id` (UUID, FK), `title` (VARCHAR), `storage_path` (VARCHAR), `created_at` (TIMESTAMPTZ).
-
-## 2. Mermaid ER Diagram
+## ER Diagram (Mermaid)
 
 ```mermaid
 erDiagram
-    anonymous_sessions ||--o{ analysis_records : owns
-    anonymous_sessions ||--o{ chat_sessions : owns
-    anonymous_sessions ||--o{ security_reports : owns
-    anonymous_sessions ||--o{ uploaded_files : owns
-
-    analysis_records ||--o| fraud_analyses : extends
-    analysis_records ||--o| log_analyses : extends
-    analysis_records ||--o| cve_analyses : extends
-
-    fraud_analyses ||--o{ fraud_transactions : analyzes
+    anonymous_sessions ||--o{ analysis_records : "owns"
+    anonymous_sessions ||--o{ chat_sessions : "owns"
     
-    uploaded_files ||--o{ log_analyses : provides_input
-    log_analyses ||--o{ threat_indicators : discovers
-
-    cve_records ||--o{ cve_analyses : references
-
-    chat_sessions ||--o{ chat_messages : contains
-
-    knowledge_documents ||--o{ knowledge_chunks : split_into
+    analysis_records ||--o| fraud_analyses : "extends"
+    analysis_records ||--o| log_analyses : "extends"
+    analysis_records ||--o| cve_analyses : "extends"
+    
+    fraud_analyses ||--|| fraud_transactions : "analyzes"
+    
+    log_analyses ||--|| uploaded_files : "source"
+    log_analyses ||--o{ log_events : "contains"
+    log_analyses ||--o{ threat_indicators : "identifies"
+    
+    cve_analyses ||--|| cve_records : "references"
+    
+    chat_sessions ||--o{ chat_messages : "contains"
+    
+    analysis_records ||--o{ security_reports : "generates"
+    
+    knowledge_documents ||--o{ knowledge_chunks : "split into"
+    knowledge_chunks ||--|| knowledge_embeddings : "vectorized"
 ```
 
-## 3. Database Design Rules
-* **UUID Strategy**: All primary keys (except external IDs like CVEs) use UUIDv4 generated by the application or database.
-* **Timestamps**: All entities include `created_at`. Updatable entities include `updated_at`. Use `TIMESTAMPTZ` for timezone awareness.
-* **JSONB**: Use only for flexible, non-indexed data (e.g., unstructured transaction features). Relational columns preferred.
-* **pgvector**: Use for RAG embeddings. Requires `CREATE EXTENSION vector`.
-* **Soft Deletes**: Not implemented by default to comply with minimal storage requirements. Retention policy (e.g., delete sessions older than 30 days) TO BE DECIDED.
-* **Secrets**: No raw API keys or passwords stored in the database.
+## Entity Definitions
+
+### 1. `anonymous_sessions`
+* **Purpose**: Tracks anonymous users via UUID stored in secure cookies.
+* **Primary Key**: `id` (UUID)
+* **Columns**:
+    * `id` (UUID, PK)
+    * `created_at` (TIMESTAMP, NN)
+    * `last_active_at` (TIMESTAMP, NN)
+    * `ip_hash` (VARCHAR, Nullable) - Hashed for security if rate limiting needed
+    * `user_agent` (VARCHAR, Nullable)
+* **Lifecycle**: Can be expired/deleted if inactive for a set period (e.g., 30 days).
+
+### 2. `analysis_records` (Abstract/Base Concept)
+* **Purpose**: Centralized metadata table linking all analysis types to a session for easy history fetching.
+* **Primary Key**: `id` (UUID)
+* **Foreign Keys**: `session_id` -> `anonymous_sessions(id)`
+* **Columns**:
+    * `id` (UUID, PK)
+    * `session_id` (UUID, NN, FK)
+    * `analysis_type` (VARCHAR, NN) - ENUM: 'FRAUD', 'EVENT_LOG', 'CVE'
+    * `status` (VARCHAR, NN) - ENUM: 'PENDING', 'COMPLETED', 'FAILED'
+    * `risk_score` (INTEGER, Nullable) - Normalized 0-100 score
+    * `severity` (VARCHAR, Nullable) - ENUM: 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'
+    * `created_at` (TIMESTAMP, NN)
+    * `completed_at` (TIMESTAMP, Nullable)
+* **Indexes**: Index on `session_id`, `created_at`.
+
+### 3. `fraud_analyses`
+* **Purpose**: Results of a UPI fraud detection run.
+* **Primary Key**: `analysis_id` (UUID) - Also FK to `analysis_records(id)`
+* **Columns**:
+    * `analysis_id` (UUID, PK, FK)
+    * `fraud_probability` (DECIMAL, NN)
+    * `ai_explanation` (TEXT, Nullable)
+    * `model_version` (VARCHAR, Nullable)
+
+### 4. `fraud_transactions`
+* **Purpose**: The raw input data for the fraud analysis.
+* **Primary Key**: `id` (UUID)
+* **Foreign Keys**: `analysis_id` -> `fraud_analyses(analysis_id)`
+* **Columns**:
+    * `id` (UUID, PK)
+    * `analysis_id` (UUID, NN, FK, Unique)
+    * `amount` (DECIMAL, NN)
+    * `transaction_timestamp` (TIMESTAMP, NN)
+    * *(Other fields **TO BE FINALIZED** based on dataset)*
+
+### 5. `uploaded_files`
+* **Purpose**: Metadata for uploaded EVTX files.
+* **Primary Key**: `id` (UUID)
+* **Columns**:
+    * `id` (UUID, PK)
+    * `session_id` (UUID, NN, FK)
+    * `original_filename` (VARCHAR, NN)
+    * `storage_path` (VARCHAR, NN)
+    * `file_size_bytes` (BIGINT, NN)
+    * `mime_type` (VARCHAR, NN)
+    * `created_at` (TIMESTAMP, NN)
+* **Lifecycle**: Files deleted from object storage after parsing; this record remains as metadata.
+
+### 6. `log_analyses`
+* **Purpose**: Results of EVTX file parsing and threat detection.
+* **Primary Key**: `analysis_id` (UUID) - Also FK to `analysis_records(id)`
+* **Foreign Keys**: `file_id` -> `uploaded_files(id)`
+* **Columns**:
+    * `analysis_id` (UUID, PK, FK)
+    * `file_id` (UUID, NN, FK, Unique)
+    * `total_events_parsed` (INTEGER, NN)
+    * `threats_detected` (INTEGER, NN)
+    * `ai_summary` (TEXT, Nullable)
+
+### 7. `log_events` (Optional / Aggregate)
+* **Purpose**: Store important parsed events. (Avoid storing millions of benign events in PG; perhaps only store anomalous ones, or use JSONB for bulk).
+* **Primary Key**: `id` (UUID)
+* **Foreign Keys**: `analysis_id` -> `log_analyses(analysis_id)`
+* **Columns**:
+    * `id` (UUID, PK)
+    * `analysis_id` (UUID, NN, FK)
+    * `event_id` (INTEGER, NN)
+    * `provider` (VARCHAR, Nullable)
+    * `event_timestamp` (TIMESTAMP, NN)
+    * `raw_data` (JSONB, Nullable) - Full event context
+* **Indexes**: Index on `analysis_id`, `event_id`.
+
+### 8. `threat_indicators`
+* **Purpose**: Specific security alerts generated from `log_events`.
+* **Primary Key**: `id` (UUID)
+* **Foreign Keys**: `analysis_id` -> `log_analyses(analysis_id)`
+* **Columns**:
+    * `id` (UUID, PK)
+    * `analysis_id` (UUID, NN, FK)
+    * `indicator_type` (VARCHAR, NN) - e.g., 'LATERAL_MOVEMENT', 'PRIVILEGE_ESCALATION'
+    * `description` (TEXT, NN)
+    * `severity` (VARCHAR, NN)
+
+### 9. `cve_records`
+* **Purpose**: Local cache of CVE data from external APIs.
+* **Primary Key**: `cve_id` (VARCHAR) - e.g., "CVE-2023-12345"
+* **Columns**:
+    * `cve_id` (VARCHAR, PK)
+    * `description` (TEXT, NN)
+    * `cvss_score` (DECIMAL, Nullable)
+    * `published_date` (TIMESTAMP, Nullable)
+    * `last_modified_date` (TIMESTAMP, Nullable)
+    * `raw_api_response` (JSONB, Nullable) - Cache for missing fields
+    * `fetched_at` (TIMESTAMP, NN)
+
+### 10. `cve_analyses`
+* **Purpose**: The user's specific query and AI explanation of a CVE.
+* **Primary Key**: `analysis_id` (UUID) - Also FK to `analysis_records(id)`
+* **Foreign Keys**: `cve_id` -> `cve_records(cve_id)`
+* **Columns**:
+    * `analysis_id` (UUID, PK, FK)
+    * `cve_id` (VARCHAR, NN, FK)
+    * `ai_explanation` (TEXT, Nullable)
+    * `mitigation_advice` (TEXT, Nullable)
+
+### 11. `chat_sessions`
+* **Purpose**: Groups a conversation with the AI Assistant.
+* **Primary Key**: `id` (UUID)
+* **Foreign Keys**: `session_id` -> `anonymous_sessions(id)`
+* **Columns**:
+    * `id` (UUID, PK)
+    * `session_id` (UUID, NN, FK)
+    * `title` (VARCHAR, Nullable)
+    * `created_at` (TIMESTAMP, NN)
+    * `updated_at` (TIMESTAMP, NN)
+
+### 12. `chat_messages`
+* **Purpose**: Individual messages within a chat session.
+* **Primary Key**: `id` (UUID)
+* **Foreign Keys**: `chat_session_id` -> `chat_sessions(id)`
+* **Columns**:
+    * `id` (UUID, PK)
+    * `chat_session_id` (UUID, NN, FK)
+    * `role` (VARCHAR, NN) - ENUM: 'USER', 'ASSISTANT', 'SYSTEM'
+    * `content` (TEXT, NN)
+    * `created_at` (TIMESTAMP, NN)
+
+### 13. `knowledge_documents` (RAG)
+* **Purpose**: Track ingested cybersecurity documents.
+* **Primary Key**: `id` (UUID)
+* **Columns**:
+    * `id` (UUID, PK)
+    * `title` (VARCHAR, NN)
+    * `source_url` (VARCHAR, Nullable)
+    * `created_at` (TIMESTAMP, NN)
+
+### 14. `knowledge_chunks` & `knowledge_embeddings` (RAG)
+* **Purpose**: Store text chunks and vector embeddings (pgvector).
+* **Primary Key**: `id` (UUID)
+* **Foreign Keys**: `document_id` -> `knowledge_documents(id)`
+* **Columns**:
+    * `id` (UUID, PK)
+    * `document_id` (UUID, NN, FK)
+    * `content` (TEXT, NN)
+    * `embedding` (VECTOR, NN) - pgvector type (Dimensions **TO BE DECIDED**)
+
+### 15. `security_reports`
+* **Purpose**: Store generated PDF/JSON report metadata.
+* **Primary Key**: `id` (UUID)
+* **Foreign Keys**: `analysis_id` -> `analysis_records(id)`
+* **Columns**:
+    * `id` (UUID, PK)
+    * `analysis_id` (UUID, NN, FK)
+    * `report_format` (VARCHAR, NN) - ENUM: 'PDF', 'JSON'
+    * `storage_path` (VARCHAR, NN)
+    * `created_at` (TIMESTAMP, NN)

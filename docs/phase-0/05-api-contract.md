@@ -1,57 +1,86 @@
-# API Contract
+# Phase 0: API Contract
 
-## Conventions
+This document defines the REST API conventions for Sentrix AI. No application code will be implemented in this phase.
+
+## Global Conventions
+
 * **Base URL**: `/api/v1`
-* **Content-Type**: `application/json`
-* **Authentication**: HTTP-only Cookie (`SESSION_ID`) for state. No Authorization headers required for anonymous flows.
-* **Pagination**: `?page=0&size=20&sort=createdAt,desc`
-* **Idempotency**: `POST` operations that create resources should return HTTP 201. Identical `POST` requests create new resources. `PUT`/`PATCH` are idempotent.
+* **Request/Response Format**: JSON (`application/json`)
+* **Identifiers**: UUIDs for resource IDs.
+* **Authentication**: Cookie-based anonymous session (`SESSION_ID`).
+* **Cross-Origin**: CORS configured for allowed frontend origins.
+* **Idempotency**: `POST` operations are generally not idempotent, `PUT`/`GET`/`DELETE` are. Use `Idempotency-Key` headers for critical `POST` actions if required later.
 
-## Endpoint Groups (Proposed)
+## Standard Endpoint Groups
 
-### 1. Health & Session
-* `GET /api/v1/health` - System status.
-* `POST /api/v1/session/init` - Initialize an anonymous session (Set-Cookie).
-* `GET /api/v1/session/status` - Validate active session.
+### 1. Session Management
+* `POST /api/v1/session/init` - Initialize a new anonymous session. Set HTTP-only cookie.
+* `GET /api/v1/session/status` - Check if session is valid.
+* `DELETE /api/v1/session/invalidate` - Terminate current session.
 
 ### 2. Dashboard
-* `GET /api/v1/dashboard/summary` - Aggregate metrics for the session.
+* `GET /api/v1/dashboard/metrics` - Retrieve aggregate statistics (recent threats, system health) for the UI.
 
-### 3. Analyses (Common)
-* `GET /api/v1/analyses` - Paginated history of all analyses for the session.
-* `GET /api/v1/analyses/{id}` - Get status/details of a specific analysis.
+### 3. UPI Fraud Detection
+* `POST /api/v1/fraud/analyze` - Submit transaction data.
+  * *Request Body*: Transaction DTO (**Fields TO BE FINALIZED**)
+  * *Response Body*: `AnalysisRecord` DTO with nested `FraudAnalysis` DTO.
+* `GET /api/v1/fraud/{id}` - Fetch specific fraud analysis result.
 
-### 4. Fraud Detection
-* `POST /api/v1/fraud/analyze`
-  * **Request**: JSON containing transaction details.
-  * **Response**: Fraud probability, Risk score, AI explanation. (Synchronous).
+### 4. Windows Event Logs
+* `POST /api/v1/event-logs/upload` - Upload an EVTX file (multipart/form-data).
+  * *Response Body*: Job ID (for async tracking).
+* `GET /api/v1/event-logs/{id}` - Fetch specific log analysis result.
+* `GET /api/v1/event-logs/{id}/events` - Fetch paginated parsed events.
 
-### 5. Event Logs
-* `POST /api/v1/event-logs/upload`
-  * **Request**: `multipart/form-data` with `.evtx` or `.xml` file.
-  * **Response**: `202 Accepted` with `jobId`. (Asynchronous processing).
-* `GET /api/v1/event-logs/jobs/{jobId}` - Poll status.
-* `GET /api/v1/event-logs/{analysisId}` - Retrieve completed analysis and threat indicators.
+### 5. CVE Intelligence
+* `POST /api/v1/cves/lookup` - Query a CVE ID and generate AI explanation.
+  * *Request Body*: `{ "cveId": "CVE-XXXX-XXXX" }`
+  * *Response Body*: `AnalysisRecord` DTO with nested `CveAnalysis` DTO.
+* `GET /api/v1/cves/{id}` - Fetch historical CVE analysis.
 
-### 6. CVE Intelligence
-* `GET /api/v1/cves/{cveId}`
-  * **Response**: CVE details and AI explanation. (Synchronous).
-* `POST /api/v1/cves/search`
-  * **Request**: JSON with search criteria.
+### 6. AI Cybersecurity Assistant
+* `POST /api/v1/chat/sessions` - Start a new chat session.
+* `GET /api/v1/chat/sessions` - List user's chat sessions.
+* `POST /api/v1/chat/sessions/{sessionId}/messages` - Send a message to the assistant.
+  * *Response*: May be standard JSON or Server-Sent Events (SSE) for streaming (**TO BE DECIDED**).
+* `GET /api/v1/chat/sessions/{sessionId}/messages` - Get chat history.
 
-### 7. AI Cybersecurity Assistant (Chat)
-* `POST /api/v1/chat/sessions` - Create a new chat thread.
-* `GET /api/v1/chat/sessions/{sessionId}/messages` - History.
-* `POST /api/v1/chat/sessions/{sessionId}/messages`
-  * **Request**: `{ "content": "user query" }`
-  * **Response**: AI reply.
+### 7. Analysis History
+* `GET /api/v1/analyses` - Fetch a paginated list of all past analyses (Fraud, Logs, CVEs) for the current session.
+  * *Query Params*: `?page=0&size=20&type=FRAUD`
 
-### 8. RAG Management (Admin/Internal)
-* `POST /api/v1/rag/documents` - Ingest new knowledge.
-* `GET /api/v1/rag/search` - Test similarity search.
+### 8. Security Reports
+* `POST /api/v1/reports/generate` - Request report generation for a specific analysis.
+  * *Request Body*: `{ "analysisId": "uuid", "format": "PDF" }`
+  * *Response Body*: Job ID.
+* `GET /api/v1/reports/{id}/download` - Download the generated report file.
 
-### 9. Reports
-* `POST /api/v1/reports/generate`
-  * **Request**: JSON list of `analysisIds`.
-  * **Response**: `202 Accepted` with `jobId`.
-* `GET /api/v1/reports/{reportId}/download` - Stream PDF/HTML.
+### 9. System Health (Actuator)
+* `GET /actuator/health` - Basic health status.
+
+## Standard DTO Structures
+
+### Standard Success Response
+Most endpoints will return the domain object directly. For complex operations or paginated responses, standard structures apply.
+
+```json
+{
+  "content": [ ... ],
+  "page": {
+    "size": 20,
+    "totalElements": 45,
+    "totalPages": 3,
+    "number": 0
+  }
+}
+```
+
+### Async Job Response
+```json
+{
+  "jobId": "uuid",
+  "status": "PENDING",
+  "message": "File processing has started."
+}
+```
