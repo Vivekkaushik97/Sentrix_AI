@@ -14,6 +14,9 @@ import Incidents from './pages/Incidents';
 import IncidentDetail from './pages/IncidentDetail';
 import Investigations from './pages/Investigations';
 import InvestigationDetail from './pages/InvestigationDetail';
+import Actions from './pages/Actions';
+import ActionDetail from './pages/ActionDetail';
+import AnalystWorkspace from './pages/AnalystWorkspace';
 import { Toaster } from '@/components/ui/sonner';
 
 function App() {
@@ -32,6 +35,9 @@ function App() {
           <Route path="/cves" element={<CVEIntelligence />} />
           <Route path="/incidents" element={<Incidents />} />
           <Route path="/incidents/:id" element={<IncidentDetail />} />
+          <Route path="/actions" element={<Actions />} />
+          <Route path="/actions/:id" element={<ActionDetail />} />
+          <Route path="/security-operations" element={<AnalystWorkspace />} />
           <Route path="/assistant" element={<AIAssistant />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/history" element={<History />} />

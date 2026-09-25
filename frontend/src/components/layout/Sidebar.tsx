@@ -25,6 +25,7 @@ const navigation = [
   { name: 'Overview', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Investigations', href: '/investigations', icon: Briefcase },
   { name: 'Incidents', href: '/incidents', icon: AlertTriangle },
+  { name: 'Action Center', href: '/actions', icon: ShieldAlert },
   { name: 'Windows Security', href: '/windows-events', icon: Monitor },
   { name: 'UPI Security', href: '/upi-security', icon: ShieldAlert },
   { name: 'Fraud Analysis', href: '/fraud', icon: ShieldAlert },

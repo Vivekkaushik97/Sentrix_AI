@@ -1,8 +1,10 @@
-import { Shield, Activity, FileWarning, Search, Radio } from 'lucide-react';
+import { Shield, Activity, FileWarning, Search, Radio, ShieldAlert } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
 import { useEffect, useState } from 'react';
 import { useLiveSecurityEvents } from '@/api/liveEvents';
+import type { SecurityPostureDto } from '@/api/posture';
+import { postureApi } from '@/api/posture';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface DashboardMetrics {
@@ -15,29 +17,32 @@ interface DashboardMetrics {
 
 const Dashboard = () => {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
+  const [posture, setPosture] = useState<SecurityPostureDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
   const { events, status } = useLiveSecurityEvents();
 
   useEffect(() => {
-    const fetchMetrics = async () => {
+    const fetchData = async () => {
       try {
-        const res = await fetch('/api/v1/dashboard/metrics');
-        if (!res.ok) throw new Error('Failed to fetch dashboard metrics');
-        const json = await res.json();
-        if (json.success) {
-          setMetrics(json.data);
-        } else {
-          throw new Error(json.message || 'Error loading metrics');
-        }
+        const [metricsRes, postureData] = await Promise.all([
+          fetch('/api/v1/dashboard/metrics').then(res => {
+            if (!res.ok) throw new Error('Failed to fetch metrics');
+            return res.json();
+          }),
+          postureApi.getLatestPosture().catch(() => null)
+        ]);
+        
+        if (metricsRes.success) setMetrics(metricsRes.data);
+        if (postureData) setPosture(postureData);
       } catch (err: any) {
         setError(err.message);
       } finally {
         setLoading(false);
       }
     };
-    fetchMetrics();
+    fetchData();
   }, []);
 
   const getSeverityColor = (sev: string | null) => {
@@ -77,7 +82,17 @@ const Dashboard = () => {
       </div>
 
       {/* Metric Cards Shell */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+        <Card className="bg-primary/5 border-primary/20">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Security Posture</CardTitle>
+            <ShieldAlert className="h-4 w-4 text-primary" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{loading ? '--' : `${posture?.overallScore || 0}/100`}</div>
+            <p className="text-xs text-muted-foreground">Overall Risk Rating</p>
+          </CardContent>
+        </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Analyses</CardTitle>
