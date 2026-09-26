@@ -1,0 +1,6 @@
+CREATE INDEX idx_security_incidents_status ON security_incidents(status);
+CREATE INDEX idx_security_incidents_created_at ON security_incidents(created_at);
+CREATE INDEX idx_investigations_status ON investigations(status);
+CREATE INDEX idx_investigations_created_at ON investigations(created_at);
+CREATE INDEX idx_investigation_events_investigation ON investigation_events(investigation_id);
+CREATE INDEX idx_investigation_notes_investigation ON investigation_notes(investigation_id);
